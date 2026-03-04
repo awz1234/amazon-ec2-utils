@@ -8,7 +8,7 @@
 
 """
 Usage:
-Reads EBS information from EBS NVMe device
+Reads NVMe stats from EBS and instance store NVMe devices
 """
 
 from __future__ import print_function
@@ -25,7 +25,9 @@ NVME_GET_LOG_PAGE = 0x02
 NVME_IOCTL_ADMIN_CMD = 0xC0484E41
 
 AMZN_NVME_STATS_LOGPAGE_ID = 0xD0
-AMZN_NVME_STATS_MAGIC = 0x3C23B510
+AMZN_NVME_EBS_STATS_MAGIC = 0x3C23B510
+AMZN_NVME_IS_STATS_MAGIC = 0xEC2C0D7E
+AMZN_NVME_VALID_STATS_MAGICS = (AMZN_NVME_EBS_STATS_MAGIC, AMZN_NVME_IS_STATS_MAGIC)
 
 
 class structure_dict_mixin:
@@ -160,8 +162,8 @@ class nvme_get_amzn_stats_logpage(Structure, structure_dict_mixin):
                 ("total_write_time", c_uint64),     # total time spent on write operations (in microseconds)
                 ("ebs_volume_performance_exceeded_iops", c_uint64),       # time EBS volume IOPS limit was exceeded (in microseconds)
                 ("ebs_volume_performance_exceeded_tp", c_uint64),         # time EBS volume throughput limit was exceeded (in microseconds)
-                ("ec2_instance_ebs_performance_exceeded_iops", c_uint64), # time EC2 instance EBS IOPS limit was exceeded (in microseconds)
-                ("ec2_instance_ebs_performance_exceeded_tp", c_uint64),   # time EC2 instance EBS throughput limit was exceeded (in microseconds)
+                ("ec2_instance_performance_exceeded_iops", c_uint64), # time EC2 instance IOPS limit was exceeded (in microseconds)
+                ("ec2_instance_performance_exceeded_tp", c_uint64),   # time EC2 instance throughput limit was exceeded (in microseconds)
                 ("volume_queue_length", c_uint64),  # current volume queue length
                 ("_reserved1", c_char * 416),
                 ("read_io_latency_histogram", ebs_nvme_histogram), # histogram of read I/O latencies (in microseconds)
@@ -189,12 +191,15 @@ class nvme_get_amzn_stats_logpage(Structure, structure_dict_mixin):
         print("  Read: {0}".format(self.total_read_time))
         print("  Write: {0}".format(self.total_write_time))
 
-        print("EBS Volume Performance Exceeded (us)")
-        print("  IOPS: {0}".format(self.ebs_volume_performance_exceeded_iops))
-        print("  Throughput: {0}".format(self.ebs_volume_performance_exceeded_tp))
-        print("EC2 Instance EBS Performance Exceeded (us)")
-        print("  IOPS: {0}".format(self.ec2_instance_ebs_performance_exceeded_iops))
-        print("  Throughput: {0}".format(self.ec2_instance_ebs_performance_exceeded_tp))
+        if self._magic == AMZN_NVME_EBS_STATS_MAGIC:
+            print("EBS Volume Performance Exceeded (us)")
+            print("  IOPS: {0}".format(self.ebs_volume_performance_exceeded_iops))
+            print("  Throughput: {0}".format(self.ebs_volume_performance_exceeded_tp))
+            print("EC2 Instance EBS Performance Exceeded (us)")
+        else:
+            print("EC2 Instance Local Storage Performance Exceeded (us)")
+        print("  IOPS: {0}".format(self.ec2_instance_performance_exceeded_iops))
+        print("  Throughput: {0}".format(self.ec2_instance_performance_exceeded_tp))
 
         print("Queue Length (point in time): {0} \n".format(self.volume_queue_length))
 
@@ -231,8 +236,8 @@ class ebs_nvme_device_stats(ebs_nvme_device):
         )
         self._nvme_ioctl(admin_cmd)
 
-        if stats._magic != AMZN_NVME_STATS_MAGIC:
-            raise TypeError("[ERROR] Not an EBS device: {0}".format(self.device))
+        if stats._magic not in AMZN_NVME_VALID_STATS_MAGICS:
+            raise TypeError("[ERROR] Not an EBS or instance store device: {0}".format(self.device))
 
         return stats
 
@@ -279,7 +284,7 @@ class ebs_nvme_device_stats(ebs_nvme_device):
 
     def get_stats(self, interval=0, json_format=False):
         if interval > 0:
-            print("Polling EBS stats every {0} sec(s); press Ctrl+C to stop".format(interval))
+            print("Polling NVMe stats every {0} sec(s); press Ctrl+C to stop".format(interval))
             signal.signal(signal.SIGINT, self._signal_handler)
             self.prev = None
 
@@ -293,17 +298,17 @@ class ebs_nvme_device_stats(ebs_nvme_device):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Reads EBS information from EBS NVMe devices.")
+    parser = argparse.ArgumentParser(description="Reads NVMe stats from EBS and instance store devices.")
     cmd_parser = parser.add_subparsers(dest="cmd", help="Available commands")
     cmd_parser.required = True
 
-    stats_parser = cmd_parser.add_parser("stats", help="Get EBS NVMe stats")
+    stats_parser = cmd_parser.add_parser("stats", help="Get NVMe device stats")
     stats_parser.add_argument("device", help="Device to query")
     stats_parser.required = True
     stats_parser.add_argument("-j", "--json", action="store_true",
                          help="Output in json format")
     stats_parser.add_argument("-i", "--interval", type=int, default=0,
-                              help='Interval in seconds to poll ebs stats')
+                              help='Interval in seconds to poll stats')
 
     args = parser.parse_args()
 
